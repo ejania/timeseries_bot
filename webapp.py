@@ -6,6 +6,8 @@ import requests
 
 import telebot
 
+from plugins.payments import PaymentsPlugin
+
 API_TOKEN = open('./api_token.txt').read().splitlines()[0]
 API_URL_PREFIX = 'https://api.telegram.org/bot'
 API_URL = API_URL_PREFIX + API_TOKEN
@@ -39,4 +41,5 @@ if __name__ == '__main__':
   cherrypy.server.ssl_certificate = './webhook_cert.pem'
   cherrypy.server.ssl_private_key = './webhook_pkey.pem'
 
+  PaymentsPlugin(cherrypy.engine).subscribe()
   cherrypy.quickstart(BotServer(), '/%s/' % API_TOKEN, {'/': {}})
