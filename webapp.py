@@ -4,43 +4,39 @@ import string
 import cherrypy
 import requests
 
-PORT = 8443
+import telebot
+
+API_TOKEN = open('./api_token.txt').read().splitlines()[0]
 API_URL_PREFIX = 'https://api.telegram.org/bot'
-API_TOKEN = None
-API_URL = None
+API_URL = API_URL_PREFIX + API_TOKEN
 
-def InitializeApiToken():
-  token_file = open('./api_token.txt')
-  global API_TOKEN
-  API_TOKEN = token_file.read().splitlines()[0]
-  global API_URL
-  API_URL = API_URL_PREFIX + API_TOKEN
+bot = telebot.TeleBot(API_TOKEN)
 
-@cherrypy.popargs('token')
-class WebApp(object):
-    @cherrypy.expose
-    @cherrypy.tools.json_in()
-    @cherrypy.tools.json_out()
-    def index(self, token):
-      assert token == API_TOKEN
-      json = cherrypy.request.json 
+class BotServer(object):
+  @cherrypy.expose
+  @cherrypy.tools.json_in()
+  def index(self):
+    json = cherrypy.request.json
+    update = telebot.types.Update.de_json(json)
+    bot.process_new_messages([update.message])
 
-      chat_id = json['message']['chat']['id']
-      text = json['message']['text']
-      echo_payload = {
-          'chat_id' : chat_id,
-          'text': text
-      } 
-      print requests.get(API_URL + '/sendMessage', params=echo_payload).text
+  # Handle '/start' and '/help'
+  @bot.message_handler(commands=['help', 'start'])
+  def send_welcome(message):
+    bot.send_message(message.chat.id,
+                     'Hi there, I am SeriesBot. <3 <3 <3')
+
+  # Handle all other messages
+  @bot.message_handler(func=lambda message: True, content_types=['text'])
+  def echo_message(message):
+    bot.send_message(message.chat.id, message.text)
 
 
 if __name__ == '__main__':
-    InitializeApiToken()
+  cherrypy.server.socket_host = '0.0.0.0'
+  cherrypy.server.socket_port = 8443
+  cherrypy.server.ssl_module = 'builtin'
+  cherrypy.server.ssl_certificate = './webhook_cert.pem'
+  cherrypy.server.ssl_private_key = './webhook_pkey.pem'
 
-    cherrypy.server.socket_host = '0.0.0.0'
-    cherrypy.server.socket_port = PORT
-    cherrypy.server.ssl_module = 'builtin'
-    cherrypy.server.ssl_certificate = "./webhook_cert.pem"
-    cherrypy.server.ssl_private_key = "./webhook_pkey.pem"
-
-    cherrypy.quickstart(WebApp())
+  cherrypy.quickstart(BotServer(), '/%s/' % API_TOKEN, {'/': {}})
