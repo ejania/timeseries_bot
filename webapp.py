@@ -26,7 +26,40 @@ class BotServer(object):
   @bot.message_handler(commands=['help', 'start'])
   def send_welcome(message):
     bot.send_message(message.chat.id,
-                     'Hi there, I am SeriesBot. <3 <3 <3')
+        'Hi there, I am SeriesBot.')
+
+  # Handle '/pay'
+  @bot.message_handler(commands=['pay'])
+  def add_payments(message):
+    usage_message = (
+        'Please specify the payment amount after /pay, e.g. /pay 5.00')
+    amount = None
+    words = message.text.split()
+    if not (len(words) == 2):
+      bot.send_message(message.chat.id, usage_message)
+      return
+    try:
+      amount = float(words[1])
+    except ValueError:
+      bot.send_message(message.chat.id, usage_message)
+      return
+    payments = {message.from_user.id: amount}
+    cherrypy.engine.publish('add-payments', payments)
+
+    balance = cherrypy.engine.publish('get-user', message.from_user.id)
+    assert len(balance) == 1
+    bot.send_message(message.chat.id,
+        ('Thank you for your payment of %.2f, generous friend! '
+         'Your total balance is %.2f now.' % (amount, balance[0])))
+
+  # Handle '/balance'
+  @bot.message_handler(commands=['balance'])
+  def get_user_balance(message):
+    balance = cherrypy.engine.publish('get-user', message.from_user.id)
+    assert len(balance) == 1
+    bot.send_message(message.chat.id,
+        'Your current balance is %.2f.' % balance[0])
+
 
   # Handle all other messages
   @bot.message_handler(func=lambda message: True, content_types=['text'])
