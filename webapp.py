@@ -60,6 +60,13 @@ class BotServer(object):
     bot.send_message(message.chat.id,
         'Your current balance is %.2f.' % balance[0])
 
+  # Handle new users
+  @bot.message_handler(content_types=['new_chat_participant'])
+  def add_new_user(message):
+    new_user = message.new_chat_participant
+    cherrypy.engine.publish('add-payments', {new_user.id: 0})
+    bot.send_message(message.chat.id,
+        ('Welcome, %s! Sharing is caring.' % new_user.first_name))
 
   # Handle all other messages
   @bot.message_handler(func=lambda message: True, content_types=['text'])
