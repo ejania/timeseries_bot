@@ -18,7 +18,7 @@ When asked for "Common Name (e.g. server FQDN or YOUR name)" you should put your
 To add webhook from python commandline:
 ```
 import requests
-params = {'url': 'https://<HOST_NAME>:<PORT>/<API_TOKEN>'}
+params = {'url': 'https://<HOST_NAME>:<PORT>/<API_TOKEN>/'}  # Trailing slash is important.
 files = {'certificate': open('webhook_cert.pem', 'r')}
 r = requests.post('https://api.telegram.org/bot<API_TOKEN>/setWebhook', params=params, files=files)
 ```
