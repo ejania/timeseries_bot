@@ -1,9 +1,4 @@
-import logging
-import random
-import string
-
 import cherrypy
-import requests
 import telebot
 
 from plugins.payments import PaymentsPlugin, Sessions
