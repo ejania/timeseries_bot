@@ -5,17 +5,22 @@ from cherrypy.process import wspbus, plugins
 
 class Payments(object):
   def __init__(self):
-    self.users = defaultdict(float)
+    self.groups = dict()
 
-  def add_payments(self, payments):
+  def create_group(self, group_id):
+    self.groups[group_id] = defaultdict(float)
+
+  def add_payments(self, group_id, payments):
+    if not group_id in self.groups:
+      self.create_group(group_id)
     for (user, amount) in payments.iteritems():
-      self.users[user] += amount
+      self.groups[group_id][user] += amount
 
-  def get_user(self, user):
-    return self.users.get(user)
+  def get_user(self, group_id, user):
+    return self.groups[group_id].get(user)
 
-  def get_all_users(self):
-    return self.users
+  def get_all_users(self, group_id):
+    return self.groups[group_id].keys()
 
 
 # To be expanded with more fields.
@@ -67,16 +72,21 @@ class PaymentsPlugin(plugins.SimplePlugin):
     self.bus.log('Enabling payments API.')
     self.bus.subscribe('add-payments', self.add_payments)
     self.bus.subscribe('get-user', self.get_user)
+    self.bus.subscribe('get-all-users', self.get_all_users)
 
   def stop(self):
     self.bus.log('Disabling payments API.')
     self.bus.unsubscribe('get-user', self.get_user)
     self.bus.unsubscribe('add-payments', self.add_payments)
+    self.bus.unsubscribe('get-all-users', self.get_all_users)
 
-  def add_payments(self, payments):
+  def add_payments(self, group_id, payments):
     self.bus.log('Adding a payment between %d entities.' % len(payments))
-    self.payments.add_payments(payments)
+    self.payments.add_payments(group_id, payments)
     return True
 
-  def get_user(self, user):
-    return self.payments.get_user(user)
+  def get_user(self, user, group_id):
+    return self.payments.get_user(user, group_id)
+
+  def get_all_users(self, group_id):
+    return self.payments.get_all_users(group_id)

@@ -1,3 +1,4 @@
+import itertools
 import logging
 import random
 import string
@@ -12,8 +13,8 @@ API_TOKEN = open('./api_token.txt').read().splitlines()[0]
 API_URL_PREFIX = 'https://api.telegram.org/bot'
 API_URL = API_URL_PREFIX + API_TOKEN
 
-bot = telebot.TeleBot(API_TOKEN)
-
+# Disable threading in order to make debug logging work properly.
+bot = telebot.TeleBot(API_TOKEN, threaded=False)
 
 class BotServer(object):
   @cherrypy.expose
@@ -46,8 +47,7 @@ class BotServer(object):
       bot.send_message(message.chat.id, usage_message)
       return
 
-    session_key = get_session_key(
-        message.from_user.id, message.chat.id)
+    session_key = _GetSessionKey(message)
     session_is_open = cherrypy.engine.publish(
         'session-is-open', session_key)[0]
     if (session_is_open):
@@ -57,12 +57,14 @@ class BotServer(object):
       bot.send_message(message.chat.id, open_session_message)
       return
     cherrypy.engine.publish('add-users-to-session', session_key,
-        [message.from_user])
+        [message.from_user.username])
 
-    payments = {message.from_user.id: amount}
-    cherrypy.engine.publish('add-payments', payments)
+    payments = {message.from_user.username: amount}
+    cherrypy.engine.publish(
+        'add-payments', message.chat.id, payments)
 
-    balance = cherrypy.engine.publish('get-user', message.from_user.id)[0]
+    balance = cherrypy.engine.publish(
+        'get-user', message.chat.id, message.from_user.username)[0]
     bot.send_message(message.chat.id,
         ('Thank you for your payment of %.2f, generous friend! '
          'Your total balance is %.2f now.' % (amount, balance)))
@@ -70,29 +72,41 @@ class BotServer(object):
   # Handle '/done'
   @bot.message_handler(commands=['done'])
   def close_session(message):
-    session_key = get_session_key(
-        message.from_user.id, message.chat.id)
-    session_is_open = cherrypy.engine.publish(
-        'session-is-open', session_key)[0]
-    if session_is_open:
-      cherrypy.engine.publish('close-session', session_key)
+    if _IsSessionOpen(message):
+      # TODO: Handle splitting now.
+      cherrypy.engine.publish('close-session', _GetSessionKey(message))
       bot.send_message(message.chat.id, 'Got it. Duly noted.')
     else:
       bot.send_message(message.chat.id, 'Nothing to close here, move along.')
 
+  # Handle '/for'
+  @bot.message_handler(commands=['for'])
+  def for_users(message):
+    if _IsSessionOpen(message):
+      users = message.text.split()[1:]
+      if len(users) < 1:
+        bot.send_message(message.chat.id, 'Please provide some usernames')
+        return
+      valid, invalid = _ValidateUsers(users, message.chat.id)
+      cherrypy.engine.publish(
+          'add-users-to-session', _GetSessionKey(message), valid)
+      bot.send_message(message.chat.id, _FormatUserLists(valid, invalid))
+    else:
+      # TODO: Allow different order; users first, payment second.
+      bot.send_message(message.chat.id, 'Please pay first')
+
   # Handle '/listusers'
   @bot.message_handler(commands=['listusers'])
   def list_users(message):
-    session_key = get_session_key(
-        message.from_user.id, message.chat.id)
-    users = cherrypy.engine.publish('get-users-in-session', session_key)[0]
-    users = [user.username for user in users]
-    bot.send_message(message.chat.id, 'Current users: %s' % users)
+    users = list(*itertools.chain(
+      cherrypy.engine.publish('get-users-in-session', _GetSessionKey(message))))
+    bot.send_message(message.chat.id, 'Current users: ' + _FormatUserList(users))
 
   # Handle '/balance'
   @bot.message_handler(commands=['balance'])
   def get_user_balance(message):
-    balance = cherrypy.engine.publish('get-user', message.from_user.id)[0]
+    balance = cherrypy.engine.publish(
+        'get-user', message.chat.id, message.from_user.username)[0]
     bot.send_message(message.chat.id,
         'Your current balance is %.2f.' % balance)
 
@@ -100,7 +114,8 @@ class BotServer(object):
   @bot.message_handler(content_types=['new_chat_participant'])
   def add_new_user(message):
     new_user = message.new_chat_participant
-    cherrypy.engine.publish('add-payments', {new_user.id: 0})
+    cherrypy.engine.publish(
+        'add-payments', message.chat.id, {new_user.username: 0})
     bot.send_message(message.chat.id,
         ('Welcome, %s! Sharing is caring.' % new_user.first_name))
 
@@ -109,8 +124,36 @@ class BotServer(object):
   def echo_message(message):
     bot.send_message(message.chat.id, message.text)
 
-def get_session_key(user, group):
-  return '%s:%s' % (user, group)
+def _GetSessionKey(message):
+  return '%s:%s' % (message.from_user.username, message.chat.id)
+
+def _IsSessionOpen(message):
+  return cherrypy.engine.publish('session-is-open', _GetSessionKey(message))[0]
+
+def _ValidateUsers(users, chat_id):
+  assert len(users)
+  available_usernames = list(*itertools.chain(
+    cherrypy.engine.publish('get-all-users', chat_id)))
+  valid, invalid = [], []
+  for user in users:
+    user = user[1:]  # Delete leading '@'.
+    (invalid, valid)[user in available_usernames].append(user)
+  return valid, invalid
+
+def _Dogify(usernames):
+  return ['@%s' % user for user in usernames]
+
+def _FormatUserLists(valid, invalid):
+  response = []
+  if valid:
+    response.append('Added these guys: ' + _FormatUserList(valid))
+  if invalid:
+    response.append(
+        'Couldn\'t find those, try again: ' +  _FormatUserList(invalid))
+  return '\n'.join(response)
+
+def _FormatUserList(users):
+  return ', '.join(_Dogify(users))
 
 if __name__ == '__main__':
   cherrypy.server.socket_host = '0.0.0.0'
@@ -119,7 +162,6 @@ if __name__ == '__main__':
   cherrypy.server.ssl_certificate = './webhook_cert.pem'
   cherrypy.server.ssl_private_key = './webhook_pkey.pem'
 
-  # TODO: Find a nicer way to handle lists returned from cherrypy.engine.publish.
   PaymentsPlugin(cherrypy.engine).subscribe()
   Sessions(cherrypy.engine).subscribe()
   cherrypy.quickstart(BotServer(), '/%s/' % API_TOKEN, {'/': {}})
