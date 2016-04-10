@@ -1,7 +1,7 @@
 # TimeSeries bot
 To install dependencies using pip, run:
 ```sh
-pip install cherrypy requests pyTelegramBotAPI
+pip install cherrypy requests pyTelegramBotAPI sqlalchemy
 ```
 
 You'll need a bunch of files that are not commited to the repository. All of them should be placed in root directory of the project:
@@ -21,4 +21,9 @@ import requests
 params = {'url': 'https://<HOST_NAME>:<PORT>/<API_TOKEN>/'}  # Trailing slash is important.
 files = {'certificate': open('webhook_cert.pem', 'r')}
 r = requests.post('https://api.telegram.org/bot<API_TOKEN>/setWebhook', params=params, files=files)
+```
+
+To initialize the database:
+```
+python model.py
 ```

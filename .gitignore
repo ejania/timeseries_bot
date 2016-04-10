@@ -4,3 +4,4 @@ webhook_pkey.pem
 .DS_Store
 *.pyc
 *.swp
+*.sqlite

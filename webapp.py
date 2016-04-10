@@ -2,7 +2,10 @@ import itertools
 import cherrypy
 import telebot
 
+from tools.sqla import metadata, session
 from plugins.payments import PaymentsPlugin, Sessions
+
+import model
 
 API_TOKEN = open('./api_token.txt').read().splitlines()[0]
 API_URL_PREFIX = 'https://api.telegram.org/bot'
@@ -18,6 +21,14 @@ class BotServer(object):
     json = cherrypy.request.json
     update = telebot.types.Update.de_json(json)
     bot.process_new_messages([update.message])
+
+  @cherrypy.expose
+  def debug(self):
+    group = session.query(model.Group).get('123')
+    if group is None:
+      group = model.Group(id='123')
+      session.add(group)
+    return group.id
 
   # Handle '/start' and '/help'
   @bot.message_handler(commands=['help', 'start'])
@@ -55,14 +66,28 @@ class BotServer(object):
         [message.from_user.username])
 
     payments = {message.from_user.username: amount}
+    balance = session.query(model.Balance).filter_by(
+        group=message.chat.id,
+        user=message.from_user.username).one_or_none()
+    if balance is None:
+      balance = model.Balance(
+          group=message.chat.id,
+          user=message.from_user.username,
+          amount=amount)
+      session.add(balance)
+    else:
+      balance.amount += amount
+
     cherrypy.engine.publish(
         'add-payments', message.chat.id, payments)
 
-    balance = cherrypy.engine.publish(
+    old_balance = cherrypy.engine.publish(
         'get-user', message.chat.id, message.from_user.username)[0]
     bot.send_message(message.chat.id,
         ('Thank you for your payment of %.2f, generous friend! '
-         'Your total balance is %.2f now.' % (amount, balance)))
+         'Your total balance is %.2f now (%.2f in DB).' % (amount,
+                                                           old_balance,
+                                                           balance.amount)))
 
   # Handle '/done'
   @bot.message_handler(commands=['done'])
@@ -100,15 +125,22 @@ class BotServer(object):
   # Handle '/balance'
   @bot.message_handler(commands=['balance'])
   def get_user_balance(message):
-    balance = cherrypy.engine.publish(
+    balance = session.query(model.Balance).filter_by(
+        group=message.chat.id, user=message.from_user.username).one()
+    old_balance = cherrypy.engine.publish(
         'get-user', message.chat.id, message.from_user.username)[0]
     bot.send_message(message.chat.id,
-        'Your current balance is %.2f.' % balance)
+        'Your current balance is %.2f (%.2f from DB).' % (old_balance, balance.amount))
 
   # Handle new users
   @bot.message_handler(content_types=['new_chat_participant'])
   def add_new_user(message):
     new_user = message.new_chat_participant
+    balance = model.Balance(
+        group=message.chat.id,
+        user=new_user.username,
+        amount=0)
+    session.add(balance)
     cherrypy.engine.publish(
         'add-payments', message.chat.id, {new_user.username: 0})
     bot.send_message(message.chat.id,
@@ -127,8 +159,10 @@ def _IsSessionOpen(message):
 
 def _ValidateUsers(users, chat_id):
   assert len(users)
-  available_usernames = list(*itertools.chain(
-    cherrypy.engine.publish('get-all-users', chat_id)))
+  #available_usernames = list(*itertools.chain(
+  #  cherrypy.engine.publish('get-all-users', chat_id)))
+  available_usernames = [balance.user
+      for balance in session.query(model.Balance).filter(Balance.group == chat_id)]
   valid, invalid = [], []
   for user in users:
     user = user[1:]  # Delete leading '@'.
@@ -159,4 +193,8 @@ if __name__ == '__main__':
 
   PaymentsPlugin(cherrypy.engine).subscribe()
   Sessions(cherrypy.engine).subscribe()
-  cherrypy.quickstart(BotServer(), '/%s/' % API_TOKEN, {'/': {}})
+  cherrypy.quickstart(BotServer(), '/%s/' % API_TOKEN, {'/': {
+      'tools.SATransaction.on': True,
+      'tools.SATransaction.dburi': model.DB_URI,
+      'tools.SATransaction.echo': True,
+  }})
